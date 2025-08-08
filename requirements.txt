@@ -1,0 +1,17 @@
+# 基础依赖
+torch>=2.1.0  # 需支持FP8和整数量化功能
+torchvision>=0.16.0
+torchaudio>=2.1.0
+
+# 模型文件处理
+safetensors>=0.4.0  # 支持safetensors文件的加载与修复
+filelock>=3.12.0
+
+# 类型提示（可选，用于开发）
+typing-extensions>=4.8.0
+
+# 注意：CUDA版本需与PyTorch匹配
+# 推荐使用CUDA 11.8+以获得更好的FP8支持
+# 安装时可根据CUDA版本选择对应的PyTorch版本，例如：
+# torch==2.1.0+cu121
+    

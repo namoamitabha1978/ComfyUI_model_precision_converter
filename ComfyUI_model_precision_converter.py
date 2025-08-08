@@ -1,0 +1,347 @@
+import torch
+import os
+import folder_paths
+import pickle
+from safetensors.torch import load_file as load_safetensors, save_file as save_safetensors
+from safetensors import SafetensorError
+from comfy.utils import load_torch_file
+
+class ModelPrecisionConverter:
+    """
+    模型精度转换节点，支持模型修复、精度转换，支持bf16、fp16、fp32、int4、int8模型互转
+    """
+    def __init__(self):
+        self.output_dir = os.path.join(folder_paths.models_dir, "converted_models")
+        self.repair_dir = os.path.join(folder_paths.models_dir, "repaired_models")
+        os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.repair_dir, exist_ok=True)
+        
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model_path": ("STRING", {
+                    "default": "", 
+                    "placeholder": "输入要转换的模型路径"
+                }),
+                "input_precision": (["bf16", "fp16", "fp32", "int4", "int8"],),
+                "target_precision": (["fp8", "fp16", "fp32", "int4", "int8"],),
+                "save_directory": ("STRING", {
+                    "default": "", 
+                    "placeholder": "输入保存目录，留空使用默认目录"
+                }),
+                "quantization_scheme": (["dynamic", "static"], {
+                    "default": "dynamic",
+                    "tooltip": "dynamic: 动态量化(推荐), static: 静态量化(需校准数据)"
+                }),
+            },
+            "optional": {
+                "repair_model": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "启用修复",
+                    "label_off": "禁用修复"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("output_path", "repair_info")
+    FUNCTION = "process_model"
+    CATEGORY = "模型工具/精度转换与修复"
+    
+    def process_model(self, model_path, input_precision, target_precision, save_directory, 
+                     quantization_scheme, repair_model=False):
+        # 验证模型路径
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"模型文件不存在: {model_path}")
+            
+        # 修复模型（如果启用）
+        repair_info = "未进行修复"
+        if repair_model:
+            try:
+                model_path, repair_details = self._repair_model(model_path)
+                repair_info = f"修复成功: {repair_details}"
+            except Exception as e:
+                repair_info = f"修复失败: {str(e)}"
+        
+        # 确定保存目录
+        if not save_directory:
+            save_directory = self.output_dir
+        os.makedirs(save_directory, exist_ok=True)
+        
+        # 加载模型（使用增强的加载函数）
+        try:
+            model = self._load_model(model_path)
+        except Exception as e:
+            raise Exception(f"加载模型失败: {str(e)}")
+        
+        # 转换精度
+        try:
+            converted_model = self._convert_precision(
+                model, 
+                input_precision, 
+                target_precision,
+                quantization_scheme
+            )
+        except Exception as e:
+            raise Exception(f"转换精度失败: {str(e)}")
+        
+        # 生成输出文件名
+        base_name = os.path.basename(model_path)
+        name, ext = os.path.splitext(base_name)
+        output_filename = f"{name}_{target_precision}{ext}"
+        output_path = os.path.join(save_directory, output_filename)
+        
+        # 保存转换后的模型
+        try:
+            self._save_model(converted_model, output_path)
+        except Exception as e:
+            raise Exception(f"保存模型失败: {str(e)}")
+            
+        return (output_path, repair_info)
+    
+    def _repair_model(self, model_path):
+        """修复损坏的模型文件，支持safetensors和ckpt格式"""
+        file_ext = os.path.splitext(model_path)[1].lower()
+        base_name = os.path.basename(model_path)
+        repair_path = os.path.join(self.repair_dir, f"repaired_{base_name}")
+        
+        # 修复safetensors文件
+        if file_ext == ".safetensors":
+            try:
+                # 尝试直接加载
+                data = load_safetensors(model_path, device="cpu")
+                # 重新保存以修复可能的格式问题
+                save_safetensors(data, repair_path)
+                return repair_path, "Safetensors文件重新序列化修复"
+            except SafetensorError as e:
+                if "HeaderTooLarge" in str(e):
+                    # 处理头部过大问题
+                    return self._repair_large_header(model_path, repair_path)
+                else:
+                    # 尝试转换为ckpt格式
+                    return self._convert_to_ckpt(model_path, repair_path), "Safetensors转CKPT修复"
+        
+        # 修复ckpt文件
+        elif file_ext in [".ckpt", ".pt"]:
+            try:
+                data = torch.load(model_path, map_location="cpu")
+                torch.save(data, repair_path)
+                return repair_path, "CKPT文件重新序列化修复"
+            except Exception as e:
+                # 尝试转换为safetensors
+                return self._convert_to_safetensors(model_path, repair_path), "CKPT转Safetensors修复"
+        
+        raise Exception(f"不支持的文件格式: {file_ext}")
+    
+    def _repair_large_header(self, model_path, repair_path):
+        """修复头部过大的safetensors文件"""
+        from safetensors.header import Header
+        import json
+        
+        with open(model_path, "rb") as f:
+            # 读取并解析头部
+            header = Header.from_file(f)
+            f.seek(0)
+            data = f.read()
+        
+        # 简化元数据以减小头部大小
+        simplified_metadata = {
+            "format": "safetensors",
+            "version": header.metadata.get("version", "1.0")
+        }
+        
+        # 创建新头部
+        new_header = Header(
+            metadata=simplified_metadata,
+            tensors=header.tensors
+        )
+        
+        # 写入修复后的文件
+        with open(repair_path, "wb") as f:
+            new_header.write(f)
+            # 写入张量数据
+            f.write(data[header.header_size:])
+        
+        return repair_path, "过大头部修复（简化元数据）"
+    
+    def _convert_to_ckpt(self, model_path, repair_path):
+        """将safetensors转换为ckpt格式"""
+        data = load_safetensors(model_path, device="cpu")
+        torch.save(data, repair_path.replace(".safetensors", ".ckpt"))
+        return repair_path.replace(".safetensors", ".ckpt")
+    
+    def _convert_to_safetensors(self, model_path, repair_path):
+        """将ckpt转换为safetensors格式"""
+        data = torch.load(model_path, map_location="cpu")
+        save_safetensors(data, repair_path.replace(".ckpt", ".safetensors"))
+        return repair_path.replace(".ckpt", ".safetensors")
+    
+    def _load_model(self, model_path):
+        """增强的模型加载函数，支持多种格式和修复后文件"""
+        file_ext = os.path.splitext(model_path)[1].lower()
+        
+        try:
+            if file_ext == ".safetensors":
+                return load_safetensors(model_path, device="cpu")
+            elif file_ext in [".ckpt", ".pt"]:
+                return torch.load(model_path, map_location="cpu", weights_only=True)
+            else:
+                # 尝试通用加载方法
+                return load_torch_file(model_path)
+        except Exception as e:
+            # 最后尝试pickle加载
+            try:
+                with open(model_path, "rb") as f:
+                    return pickle.load(f)
+            except:
+                raise e
+    
+    def _save_model(self, model, path):
+        """自定义模型保存函数，支持多种格式和结构"""
+        file_ext = os.path.splitext(path)[1].lower()
+        has_dicts = any(isinstance(v, dict) for v in model.values())
+        
+        # 根据文件扩展名选择保存格式
+        if file_ext == ".safetensors" and not has_dicts:
+            # 纯张量模型可以保存为safetensors
+            save_safetensors(model, path)
+        elif file_ext in [".ckpt", ".pt"]:
+            # 保存为PyTorch格式
+            torch.save(model, path)
+        else:
+            # 混合结构使用pickle保存
+            with open(path, "wb") as f:
+                pickle.dump(model, f)
+    
+    def _convert_precision(self, model, input_precision, target_precision, quantization_scheme):
+        """转换模型权重精度"""
+        precision_map = {
+            "bf16": torch.bfloat16,
+            "fp16": torch.float16,
+            "fp32": torch.float32,
+            "fp8": torch.float8_e4m3fn,
+            "int4": torch.int4,
+            "int8": torch.int8
+        }
+        
+        # 如果输入是整数精度，先反量化为float32
+        if input_precision in ["int4", "int8"]:
+            model = self._dequantize_model(model, input_precision)
+        
+        # 整数精度转换
+        if target_precision in ["int4", "int8"]:
+            return self._integer_quantization(
+                model, 
+                input_precision, 
+                target_precision,
+                quantization_scheme
+            )
+        
+        # 标准浮点精度转换
+        target_dtype = precision_map[target_precision]
+        
+        converted = {}
+        for k, v in model.items():
+            if isinstance(v, torch.Tensor):
+                converted[k] = v.to(torch.float32).to(target_dtype)
+            else:
+                converted[k] = v
+                
+        return converted
+    
+    def _dequantize_model(self, model, input_precision):
+        """对整数量化模型进行反量化，转换为float32"""
+        dequantized = {}
+        bits = 4 if input_precision == "int4" else 8
+        
+        for k, v in model.items():
+            if isinstance(v, dict) and 'data' in v and 'scale' in v and 'zero_point' in v:
+                # 处理量化存储格式的数据
+                quantized_data = v['data']
+                scale = v['scale']
+                zero_point = v['zero_point']
+                
+                # 反量化计算：float_value = (quantized_value - zero_point) * scale
+                dequantized_tensor = (quantized_data.float() - zero_point) * scale
+                dequantized[k] = dequantized_tensor.to(torch.float32)
+            elif isinstance(v, torch.Tensor):
+                # 处理原生量化张量
+                if v.is_quantized:
+                    dequantized[k] = v.dequantize().to(torch.float32)
+                else:
+                    dequantized[k] = v.to(torch.float32)
+            else:
+                dequantized[k] = v
+                
+        return dequantized
+    
+    def _integer_quantization(self, model, input_precision, target_precision, quantization_scheme):
+        """实现INT4和INT8的整数量化"""
+        converted = {}
+        bits = 4 if target_precision == "int4" else 8
+        
+        # 确保输入是float32格式
+        float32_model = {
+            k: v.to(torch.float32) if isinstance(v, torch.Tensor) else v
+            for k, v in model.items()
+        }
+        
+        for k, v in float32_model.items():
+            if isinstance(v, torch.Tensor):
+                # 动态量化 - 更简单，无需校准数据
+                if quantization_scheme == "dynamic":
+                    # 计算缩放因子和零点
+                    min_val = v.min().item()
+                    max_val = v.max().item()
+                    
+                    # 计算缩放因子 (范围映射到整数范围)
+                    scale = (max_val - min_val) / ((2** bits) - 1)
+                    zero_point = -torch.round(torch.tensor(min_val / scale)).item()
+                    
+                    # 确保零点在有效范围内
+                    zero_point = max(0, min(zero_point, (2 ** bits) - 1))
+                    
+                    # 量化
+                    quantized = torch.clamp(torch.round(v / scale + zero_point), 0, (2 ** bits) - 1).to(
+                        torch.int8 if bits == 8 else torch.int32  # 用int32存储int4数据
+                    )
+                    
+                    # 存储量化后的数据及量化参数
+                    converted[k] = {
+                        'data': quantized,
+                        'scale': scale,
+                        'zero_point': zero_point,
+                        'dtype': target_precision
+                    }
+                
+                # 静态量化 - 更精确但需要校准
+                else:
+                    # 对于静态量化，使用PyTorch的量化工具
+                    quantized_tensor = torch.quantize_per_tensor(
+                        v,
+                        scale=1.0,  # 占位值，实际应根据校准数据计算
+                        zero_point=0,
+                        dtype=torch.qint8 if bits == 8 else torch.quint4x2
+                    )
+                    
+                    converted[k] = {
+                        'data': quantized_tensor,
+                        'scale': quantized_tensor.q_scale(),
+                        'zero_point': quantized_tensor.q_zero_point(),
+                        'dtype': target_precision
+                    }
+            else:
+                converted[k] = v
+                
+        return converted
+
+# 注册节点
+NODE_CLASS_MAPPINGS = {
+    "ModelPrecisionConverter": ModelPrecisionConverter
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "ModelPrecisionConverter": "模型精度转换与修复工具"
+}
+    
