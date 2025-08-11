@@ -27,7 +27,7 @@ class ModelPrecisionConverter:
                     "forceInput": True  # 添加此行启用文件选择按钮
                 }),
                 "input_precision": (["bf16", "fp16", "fp32", "int4", "int8"],),
-                "target_precision": (["fp8", "fp16", "fp32", "int4", "int8"],),
+                "target_precision": (["float8_e4m3fn", "fp16", "fp32", "int4", "int8"],),
                 "save_directory": ("STRING", {
                     "default": "", 
                     "placeholder": "输入保存目录，留空使用默认目录",
@@ -223,7 +223,7 @@ class ModelPrecisionConverter:
             "bf16": torch.bfloat16,
             "fp16": torch.float16,
             "fp32": torch.float32,
-            "fp8": torch.float8_e4m3fn,
+            "float8_e4m3fn": torch.float8_e4m3fn,
             "int4": torch.int4,
             "int8": torch.int8
         }
