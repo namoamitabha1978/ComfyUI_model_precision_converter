@@ -339,3 +339,12 @@ class ModelPrecisionConverter:
                 
         return converted
 
+# 注册节点
+NODE_CLASS_MAPPINGS = {
+    "ModelPrecisionConverter": ModelPrecisionConverter
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "ModelPrecisionConverter": "模型精度转换与修复工具"
+}
+    
