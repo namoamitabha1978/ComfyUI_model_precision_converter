@@ -1,6 +1,7 @@
 # 模型精度工具集
 
-这是一组用于 ComfyUI 的模型精度处理节点，包含模型精度检测和精度转换功能，支持多种模型格式和精度类型。
+这是一组用于 ComfyUI 的模型精度处理节点，包含模型精度检测和精度转换功能，支持多种模型格式和精度类型。南无阿弥陀佛
+
 
 ## 节点列表
 
@@ -13,6 +14,10 @@
 - **功能**：将模型在不同精度类型间进行转换（如 bf16→fp8），支持量化操作和模型修复
 
 ## 安装方法
+克隆仓库：
+bash
+git clone https://github.com/namoamitabha1978/ComfyUI_model_precision_converter.git
+
 1. 将本文件夹复制到 ComfyUI 的 `custom_nodes` 目录下
 2. 重启 ComfyUI 即可自动加载节点
 
