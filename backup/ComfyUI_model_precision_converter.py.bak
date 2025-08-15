@@ -180,7 +180,7 @@ class ModelPrecisionConverter:
                 torch_dtype=get_torch_dtype(input_precision),
                 safety_checker=None,
                 #device_map="cpu"
-                #device_map="balanced" 
+                device_map="balanced" 
             )
             
             
@@ -193,7 +193,7 @@ class ModelPrecisionConverter:
                 pipeline = DPTForDepthEstimation.from_pretrained(
                     model_path,
                     torch_dtype=get_torch_dtype(input_precision),
-                    #device_map="auto" 
+                    device_map="auto" 
                 )
             except Exception as e:
                 raise Exception(f"加载diffusers模型失败: {str(e)}")

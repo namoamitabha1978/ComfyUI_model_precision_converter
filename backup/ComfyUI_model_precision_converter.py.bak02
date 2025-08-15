@@ -6,7 +6,6 @@ from safetensors.torch import load_file as load_safetensors, save_file as save_s
 from safetensors import SafetensorError
 from comfy.utils import load_torch_file
 
-
 class ModelPrecisionConverter:
     """
     模型精度转换节点，支持模型修复、精度转换，支持bf16、fp16、fp32、int4、int8模型互转，支持单文件和diffusers格式
@@ -145,8 +144,7 @@ class ModelPrecisionConverter:
     def _process_diffusers_model(self, model_path, input_precision, target_precision, save_directory,
                                 quantization_scheme, repair_model=False):
         """处理diffusers格式模型目录"""
-        #from diffusers import StableDiffusionPipeline   , DPTForDepthEstimation
-        from diffusers import StableDiffusionPipeline  
+        from diffusers import StableDiffusionPipeline, DPTForDepthEstimation
         from diffusers.utils import is_safetensors_available
         
         # 确定保存目录
@@ -179,25 +177,19 @@ class ModelPrecisionConverter:
                 model_path,
                 torch_dtype=get_torch_dtype(input_precision),
                 safety_checker=None,
-                #device_map="cpu"
-                #device_map="balanced" 
+                device_map="cpu"
             )
-            
-            
-       
-        except  Exception as e:
-            raise Exception(f"加载diffusers模型失败: {str(e)}")
-            """
+        except:
             # 尝试加载其他类型模型
             try:
                 pipeline = DPTForDepthEstimation.from_pretrained(
                     model_path,
                     torch_dtype=get_torch_dtype(input_precision),
-                    #device_map="auto" 
+                    device_map="cpu"
                 )
             except Exception as e:
                 raise Exception(f"加载diffusers模型失败: {str(e)}")
-            """
+        
         # 转换精度
         target_dtype = get_torch_dtype(target_precision)
         
@@ -464,3 +456,4 @@ class ModelPrecisionConverter:
             f"修复状态: {repair_info}\n"
             f"提示: 可右键执行此节点查看最新结果"
         )
+    
